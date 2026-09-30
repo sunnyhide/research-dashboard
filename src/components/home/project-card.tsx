@@ -2,29 +2,35 @@
 
 import { MoreHorizontal } from "lucide-react";
 import Link from "next/link";
-import { useRef } from "react";
+import { useRef, useState, type DragEvent } from "react";
 import { Dropdown, DropdownItem } from "@/components/ui/dropdown";
 import type { ProjectBundle, ProjectFolder } from "@/lib/types";
-import { formatDate, plural } from "@/lib/utils";
+import { cn, formatDate, plural } from "@/lib/utils";
 import { useWorkspaceStore } from "@/store/workspace";
+
+let draggingProjectId: string | null = null;
 
 export function ProjectCard({
   bundle,
   folders,
   onNewFolder,
+  onGroup,
 }: {
   bundle: ProjectBundle;
   folders: ProjectFolder[];
   onNewFolder: (projectId: string) => void;
+  onGroup: (sourceId: string, targetId: string) => void;
 }) {
   const moveProjectToFolder = useWorkspaceStore((state) => state.moveProjectToFolder);
   const dragged = useRef(false);
+  const [grouping, setGrouping] = useState(false);
   const insights = bundle.insights.filter((insight) => insight.status !== "rejected").length;
   const folderId = bundle.project.folderId ?? null;
   const destinations = folders.filter((folder) => folder.id !== folderId);
 
   return (
     <div
+      data-project-card
       draggable
       onDragStart={(event) => {
         if ((event.target as HTMLElement).closest("[data-no-drag]")) {
@@ -32,15 +38,35 @@ export function ProjectCard({
           return;
         }
         dragged.current = true;
+        draggingProjectId = bundle.project.id;
         event.dataTransfer.setData("text/plain", bundle.project.id);
         event.dataTransfer.effectAllowed = "move";
       }}
       onDragEnd={() => {
+        draggingProjectId = null;
+        setGrouping(false);
         window.setTimeout(() => {
           dragged.current = false;
         }, 0);
       }}
-      className="flex flex-col rounded-md border border-line bg-canvas p-4 transition-colors hover:border-ink/25"
+      onDragEnter={(event) => markGroupTarget(event)}
+      onDragOver={(event) => markGroupTarget(event)}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setGrouping(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setGrouping(false);
+        const sourceId = event.dataTransfer.getData("text/plain");
+        if (!sourceId || sourceId === bundle.project.id) return;
+        onGroup(sourceId, bundle.project.id);
+      }}
+      className={cn(
+        "relative flex flex-col rounded-md border bg-canvas p-4 transition-colors",
+        grouping ? "border-accent bg-accent-soft" : "border-line hover:border-ink/25",
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         <Link
@@ -94,6 +120,14 @@ export function ProjectCard({
           {plural(bundle.participants.length, "participant")} · {plural(insights, "insight")}
         </p>
       </Link>
+      {grouping ? <p className="mt-3 text-[12px] font-medium text-accent-ink">Drop to create a folder</p> : null}
     </div>
   );
+
+  function markGroupTarget(event: DragEvent) {
+    if (draggingProjectId === bundle.project.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setGrouping(true);
+  }
 }

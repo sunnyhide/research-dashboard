@@ -109,6 +109,7 @@ interface WorkspaceState {
   updatePersona: (projectId: string, id: string, patch: Partial<Persona>) => void;
   createProject: (input: { name: string; researchType: ResearchKind; researchQuestion: string; folderId?: string | null }) => string;
   createFolder: (name: string) => string;
+  createFolderWithProjects: (name: string, projectIds: string[]) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
   moveProjectToFolder: (projectId: string, folderId: string | null) => void;
@@ -893,6 +894,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         const stamp = nowIso();
         const folder: ProjectFolder = { id: uid("folder"), name: clean, createdAt: stamp, updatedAt: stamp };
         set((state) => ({ folders: [...state.folders, folder] }));
+        get().toast("Folder created");
+        return folder.id;
+      },
+      createFolderWithProjects: (name, projectIds) => {
+        const clean = name.trim();
+        const ids = [...new Set(projectIds)].filter((id) => get().projects[id]);
+        if (!clean || ids.length < 2) return "";
+        const stamp = nowIso();
+        const folder: ProjectFolder = { id: uid("folder"), name: clean, createdAt: stamp, updatedAt: stamp };
+        set((state) => ({
+          folders: [...state.folders, folder],
+          projects: Object.fromEntries(
+            Object.entries(state.projects).map(([projectId, bundle]) => [
+              projectId,
+              ids.includes(projectId) ? { ...bundle, project: { ...bundle.project, folderId: folder.id } } : bundle,
+            ]),
+          ),
+        }));
         get().toast("Folder created");
         return folder.id;
       },

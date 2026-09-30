@@ -12,7 +12,11 @@ import { cn, firstName, greeting, plural } from "@/lib/utils";
 import { usePreferencesStore } from "@/store/preferences";
 import { useWorkspaceStore } from "@/store/workspace";
 
-type FolderPrompt = { kind: "create" } | { kind: "rename"; id: string; name: string } | { kind: "create-for"; projectId: string };
+type FolderPrompt =
+  | { kind: "create" }
+  | { kind: "rename"; id: string; name: string }
+  | { kind: "create-for"; projectId: string }
+  | { kind: "name-created"; id: string; name: string; summary: string };
 
 export function HomeView() {
   const order = useWorkspaceStore((state) => state.order);
@@ -20,6 +24,7 @@ export function HomeView() {
   const folders = useWorkspaceStore((state) => state.folders);
   const setNewProjectOpen = useWorkspaceStore((state) => state.setNewProjectOpen);
   const createFolder = useWorkspaceStore((state) => state.createFolder);
+  const createFolderWithProjects = useWorkspaceStore((state) => state.createFolderWithProjects);
   const renameFolder = useWorkspaceStore((state) => state.renameFolder);
   const deleteFolder = useWorkspaceStore((state) => state.deleteFolder);
   const moveProjectToFolder = useWorkspaceStore((state) => state.moveProjectToFolder);
@@ -30,6 +35,16 @@ export function HomeView() {
 
   function setPromptForProject(projectId: string) {
     setPrompt({ kind: "create-for", projectId });
+  }
+
+  function groupProjects(sourceId: string, targetId: string) {
+    if (!sourceId || sourceId === targetId || !projects[sourceId] || !projects[targetId]) return;
+    const folderName = nextFolderName(folders);
+    const id = createFolderWithProjects(folderName, [sourceId, targetId]);
+    if (!id) return;
+    setDragOver(null);
+    const summary = `${projects[targetId].project.name} and ${projects[sourceId].project.name} are in this folder.`;
+    setPrompt({ kind: "name-created", id, name: folderName, summary });
   }
 
   const bundles = order
@@ -45,8 +60,9 @@ export function HomeView() {
 
   function takeDrop(folderId: string | null, event: DragEvent) {
     event.preventDefault();
-    const projectId = event.dataTransfer.getData("text/plain");
     setDragOver(null);
+    if ((event.target as HTMLElement).closest("[data-project-card]")) return;
+    const projectId = event.dataTransfer.getData("text/plain");
     if (projectId) moveProjectToFolder(projectId, folderId);
   }
 
@@ -60,7 +76,7 @@ export function HomeView() {
         <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-[13px] font-medium">Projects</h2>
-            <p className="mt-1 text-[13px] text-muted-ink">Group studies into folders. Drag a project onto a folder, or use the menu on a card.</p>
+            <p className="mt-1 text-[13px] text-muted-ink">Drag one project onto another to create a folder, or drop a project onto a folder to move it.</p>
           </div>
           <div className="flex gap-2">
             <Button onClick={() => setPrompt({ kind: "create" })}>New folder</Button>
@@ -87,6 +103,7 @@ export function HomeView() {
             onRename={() => setPrompt({ kind: "rename", id: folder.id, name: folder.name })}
             onDelete={() => deleteFolder(folder.id)}
             onNewFolder={setPromptForProject}
+            onGroup={groupProjects}
           />
         ))}
 
@@ -109,7 +126,7 @@ export function HomeView() {
           {folders.length ? <h3 className="px-1 text-[13px] font-medium">Ungrouped</h3> : null}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {ungrouped.map((bundle) => (
-              <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={setPromptForProject} />
+              <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={setPromptForProject} onGroup={groupProjects} />
             ))}
             <button
               type="button"
@@ -126,16 +143,23 @@ export function HomeView() {
       </main>
       <FolderDialog
         open={prompt !== null}
-        title={prompt?.kind === "rename" ? "Rename folder" : "New folder"}
-        description={prompt?.kind === "create-for" ? "The selected project will be moved into this folder." : "Folders keep related studies together."}
-        initialName={prompt?.kind === "rename" ? prompt.name : ""}
-        confirmLabel={prompt?.kind === "rename" ? "Rename" : "Create folder"}
+        title={prompt?.kind === "rename" ? "Rename folder" : prompt?.kind === "name-created" ? "Name this folder" : "New folder"}
+        description={
+          prompt?.kind === "create-for"
+            ? "The selected project will be moved into this folder."
+            : prompt?.kind === "name-created"
+              ? prompt.summary
+              : "Folders keep related studies together."
+        }
+        initialName={prompt?.kind === "rename" || prompt?.kind === "name-created" ? prompt.name : ""}
+        confirmLabel={prompt?.kind === "rename" ? "Rename" : prompt?.kind === "name-created" ? "Save" : "Create folder"}
         onOpenChange={(open) => {
           if (!open) setPrompt(null);
         }}
         onSubmit={(folderName) => {
-          if (prompt?.kind === "rename") renameFolder(prompt.id, folderName);
-          else {
+          if (prompt?.kind === "rename" || prompt?.kind === "name-created") {
+            if (folderName !== prompt.name) renameFolder(prompt.id, folderName);
+          } else {
             const id = createFolder(folderName);
             if (prompt?.kind === "create-for" && id) moveProjectToFolder(prompt.projectId, id);
           }
@@ -144,6 +168,14 @@ export function HomeView() {
       />
     </div>
   );
+}
+
+function nextFolderName(folders: ProjectFolder[]) {
+  const names = new Set(folders.map((folder) => folder.name));
+  if (!names.has("New folder")) return "New folder";
+  let count = 2;
+  while (names.has(`New folder ${count}`)) count += 1;
+  return `New folder ${count}`;
 }
 
 function FolderSection({
@@ -158,6 +190,7 @@ function FolderSection({
   onRename,
   onDelete,
   onNewFolder,
+  onGroup,
 }: {
   folder: ProjectFolder;
   projects: ProjectBundle[];
@@ -170,6 +203,7 @@ function FolderSection({
   onRename: () => void;
   onDelete: () => void;
   onNewFolder: (projectId: string) => void;
+  onGroup: (sourceId: string, targetId: string) => void;
 }) {
   return (
     <section
@@ -211,7 +245,7 @@ function FolderSection({
       {projects.length ? (
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {projects.map((bundle) => (
-            <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={onNewFolder} />
+            <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={onNewFolder} onGroup={onGroup} />
           ))}
         </div>
       ) : (
