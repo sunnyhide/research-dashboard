@@ -22,6 +22,14 @@ export interface Project {
   updatedAt: string;
   createdBy: string;
   tags: string[];
+  folderId?: string | null;
+}
+
+export interface ProjectFolder {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Participant {

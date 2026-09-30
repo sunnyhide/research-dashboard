@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { StatusBadge } from "@/components/insights/insight-card";
+import { UploadResearch } from "@/components/research/upload-research";
 import { useProject } from "@/store/workspace";
 
 export function OverviewView({ projectId }: { projectId: string }) {
@@ -22,7 +23,8 @@ export function OverviewView({ projectId }: { projectId: string }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-6 py-8">
-        <p className="text-[12px] uppercase tracking-[0.14em] text-muted-ink">{bundle.project.researchType}</p>
+        <UploadResearch projectId={projectId} sources={bundle.sources} />
+        <p className="mt-8 text-[12px] uppercase tracking-[0.14em] text-muted-ink">{bundle.project.researchType}</p>
         <h1 className="mt-1 max-w-3xl text-xl font-medium tracking-tight">{bundle.project.researchQuestion || "Add a research question in settings."}</h1>
         <p className="mt-2 max-w-2xl text-[13px] text-muted-ink">{bundle.project.description}</p>
         <dl className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">

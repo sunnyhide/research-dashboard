@@ -80,6 +80,8 @@ function ShareDialog() {
 
 function NewProjectDialog() {
   const open = useWorkspaceStore((state) => state.newProjectOpen);
+  const folderId = useWorkspaceStore((state) => state.newProjectFolderId);
+  const folderName = useWorkspaceStore((state) => state.folders.find((folder) => folder.id === folderId)?.name);
   const setOpen = useWorkspaceStore((state) => state.setNewProjectOpen);
   const createProject = useWorkspaceStore((state) => state.createProject);
   const router = useRouter();
@@ -88,7 +90,12 @@ function NewProjectDialog() {
   const [question, setQuestion] = useState("");
 
   return (
-    <Modal open={open} onOpenChange={setOpen} title="New project" description="Start with a question. Evidence can come later.">
+    <Modal
+      open={open}
+      onOpenChange={setOpen}
+      title="New project"
+      description={folderName ? `This project will be added to ${folderName}.` : "Start with a question. Evidence can come later."}
+    >
       <form
         className="space-y-3"
         onSubmit={(event) => {

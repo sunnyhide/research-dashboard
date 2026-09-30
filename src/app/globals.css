@@ -155,12 +155,14 @@ body {
   scrollbar-color: var(--border) transparent;
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  color: inherit;
+@layer base {
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
 }
 
 .sticky-yellow { background: #f8e7a2; border-color: #e4d48a; color: #3a3314; }

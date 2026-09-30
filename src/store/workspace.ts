@@ -16,9 +16,12 @@ import type {
   NoteKind,
   Persona,
   ProjectBundle,
+  ProjectFolder,
   Quote,
   ResearchKind,
   ResearchNote,
+  ResearchSource,
+  SourceType,
   StickyColor,
   StickyNote,
   Theme,
@@ -38,6 +41,7 @@ interface ToastItem {
 interface WorkspaceState {
   projects: Record<string, ProjectBundle>;
   order: string[];
+  folders: ProjectFolder[];
   canvas: Record<string, CanvasView>;
   selection: string[];
   filter: CanvasFilter;
@@ -53,6 +57,7 @@ interface WorkspaceState {
   helpOpen: boolean;
   shareOpen: boolean;
   newProjectOpen: boolean;
+  newProjectFolderId: string | null;
   editingId: string | null;
   pendingFocusId: string | null;
   viewport: { width: number; height: number };
@@ -69,7 +74,7 @@ interface WorkspaceState {
   setAnalysisOpen: (open: boolean, view?: "setup" | "review") => void;
   setHelpOpen: (open: boolean) => void;
   setShareOpen: (open: boolean) => void;
-  setNewProjectOpen: (open: boolean) => void;
+  setNewProjectOpen: (open: boolean, folderId?: string | null) => void;
   setEditingId: (id: string | null) => void;
   setPendingFocusId: (id: string | null) => void;
   setViewport: (viewport: { width: number; height: number }) => void;
@@ -98,10 +103,15 @@ interface WorkspaceState {
   mergeFindings: (projectId: string, ids: string[]) => void;
   addFindings: (projectId: string, findings: AIFinding[]) => void;
   addNote: (projectId: string, partial?: Partial<ResearchNote>) => string | null;
+  addUploadedFiles: (projectId: string, files: { name: string; text: string; type: SourceType }[]) => void;
   updateNote: (projectId: string, id: string, patch: Partial<ResearchNote>) => void;
   deleteNote: (projectId: string, id: string) => void;
   updatePersona: (projectId: string, id: string, patch: Partial<Persona>) => void;
-  createProject: (input: { name: string; researchType: ResearchKind; researchQuestion: string }) => string;
+  createProject: (input: { name: string; researchType: ResearchKind; researchQuestion: string; folderId?: string | null }) => string;
+  createFolder: (name: string) => string;
+  renameFolder: (id: string, name: string) => void;
+  deleteFolder: (id: string) => void;
+  moveProjectToFolder: (projectId: string, folderId: string | null) => void;
   resetWorkspace: () => void;
   focusObject: (projectId: string, id: string) => void;
   linkQuote: (projectId: string, insightId: string, quoteId: string) => void;
@@ -132,6 +142,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     (set, get) => ({
       projects: cloneSeed(),
       order: seedBundles.map((bundle) => bundle.project.id),
+      folders: [],
       canvas: { ...seedCanvas },
       selection: [],
       filter: "all",
@@ -147,6 +158,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       helpOpen: false,
       shareOpen: false,
       newProjectOpen: false,
+      newProjectFolderId: null,
       editingId: null,
       pendingFocusId: null,
       viewport: { width: 1280, height: 800 },
@@ -180,7 +192,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setAnalysisOpen: (analysisOpen, view = "setup") => set({ analysisOpen, analysisView: analysisOpen ? view : "setup" }),
       setHelpOpen: (helpOpen) => set({ helpOpen }),
       setShareOpen: (shareOpen) => set({ shareOpen }),
-      setNewProjectOpen: (newProjectOpen) => set({ newProjectOpen }),
+      setNewProjectOpen: (newProjectOpen, folderId = null) =>
+        set({ newProjectOpen, newProjectFolderId: newProjectOpen ? folderId : null }),
       setEditingId: (editingId) => set({ editingId }),
       setPendingFocusId: (pendingFocusId) => set({ pendingFocusId }),
       setViewport: (viewport) => set({ viewport }),
@@ -778,6 +791,57 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         get().toast("Note created");
         return id;
       },
+      addUploadedFiles: (projectId, files) => {
+        if (!files.length || !get().projects[projectId]) return;
+        get().beginHistory();
+        const stamp = nowIso();
+        const who = author();
+        const sources: ResearchSource[] = [];
+        const notes: ResearchNote[] = [];
+        for (const file of files) {
+          const sourceId = uid("src");
+          const body = file.text.trim();
+          sources.push({
+            id: sourceId,
+            projectId,
+            type: file.type,
+            title: file.name,
+            date: stamp.slice(0, 10),
+            participantIds: [],
+            createdAt: stamp,
+            updatedAt: stamp,
+            createdBy: who,
+            tags: ["upload"],
+          });
+          notes.push({
+            id: uid("note"),
+            projectId,
+            kind: file.type === "interview" ? "quote" : "text",
+            title: file.name,
+            body: body ? body.slice(0, 12000) : "File added. Text could not be read from this format, so only the file name is stored with the project.",
+            tags: ["upload"],
+            createdAt: stamp,
+            updatedAt: stamp,
+            createdBy: who,
+          });
+        }
+        set((state) => {
+          const next = state.projects[projectId];
+          if (!next) return state;
+          return {
+            projects: {
+              ...state.projects,
+              [projectId]: {
+                ...next,
+                sources: [...sources, ...next.sources],
+                notes: [...notes, ...next.notes],
+                project: { ...next.project, updatedAt: stamp },
+              },
+            },
+          };
+        });
+        get().toast(files.length === 1 ? "File uploaded" : `${files.length} files uploaded`);
+      },
       updateNote: (projectId, id, patch) =>
         set((state) => {
           const bundle = state.projects[projectId];
@@ -811,19 +875,70 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }),
       createProject: (input) => {
         const bundle = createEmptyBundle({ ...input, createdBy: author() });
+        const folderId = input.folderId !== undefined ? input.folderId : get().newProjectFolderId;
+        if (folderId && get().folders.some((folder) => folder.id === folderId)) bundle.project.folderId = folderId;
         set((state) => ({
           projects: { ...state.projects, [bundle.project.id]: bundle },
           order: [bundle.project.id, ...state.order],
           canvas: { ...state.canvas, [bundle.project.id]: { x: 48, y: 48, zoom: 1 } },
           newProjectOpen: false,
+          newProjectFolderId: null,
         }));
         get().toast("Project created");
         return bundle.project.id;
+      },
+      createFolder: (name) => {
+        const clean = name.trim();
+        if (!clean) return "";
+        const stamp = nowIso();
+        const folder: ProjectFolder = { id: uid("folder"), name: clean, createdAt: stamp, updatedAt: stamp };
+        set((state) => ({ folders: [...state.folders, folder] }));
+        get().toast("Folder created");
+        return folder.id;
+      },
+      renameFolder: (id, name) => {
+        const clean = name.trim();
+        if (!clean) return;
+        set((state) => ({
+          folders: state.folders.map((folder) => (folder.id === id ? { ...folder, name: clean, updatedAt: nowIso() } : folder)),
+        }));
+        get().toast("Folder renamed");
+      },
+      deleteFolder: (id) => {
+        set((state) => ({
+          folders: state.folders.filter((folder) => folder.id !== id),
+          projects: Object.fromEntries(
+            Object.entries(state.projects).map(([projectId, bundle]) => [
+              projectId,
+              bundle.project.folderId === id ? { ...bundle, project: { ...bundle.project, folderId: null } } : bundle,
+            ]),
+          ),
+        }));
+        get().toast("Folder deleted. Projects were kept.");
+      },
+      moveProjectToFolder: (projectId, folderId) => {
+        const bundle = get().projects[projectId];
+        if (!bundle) return;
+        const nextFolder = folderId && get().folders.some((folder) => folder.id === folderId) ? folderId : null;
+        if ((bundle.project.folderId ?? null) === nextFolder) return;
+        set((state) => {
+          const current = state.projects[projectId];
+          if (!current) return state;
+          return {
+            projects: {
+              ...state.projects,
+              [projectId]: { ...current, project: { ...current.project, folderId: nextFolder } },
+            },
+          };
+        });
+        const folder = nextFolder ? get().folders.find((item) => item.id === nextFolder) : undefined;
+        get().toast(folder ? `Moved to ${folder.name}` : "Removed from folder");
       },
       resetWorkspace: () => {
         set({
           projects: cloneSeed(),
           order: seedBundles.map((bundle) => bundle.project.id),
+          folders: [],
           canvas: { ...seedCanvas },
           selection: [],
           past: [],
@@ -919,7 +1034,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       name: WORKSPACE_STORAGE_KEY,
       version: 1,
       storage: createJSONStorage(() => createDebouncedStorage()),
-      partialize: (state) => ({ projects: state.projects, order: state.order, canvas: state.canvas }),
+      partialize: (state) => ({ projects: state.projects, order: state.order, folders: state.folders, canvas: state.canvas }),
     },
   ),
 );
