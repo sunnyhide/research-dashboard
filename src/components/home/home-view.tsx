@@ -1,7 +1,7 @@
 "use client";
 
 import { Folder, MoreHorizontal } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { FolderDialog } from "@/components/home/folder-dialog";
 import { ProjectCard } from "@/components/home/project-card";
 import { TopBar } from "@/components/shell/top-bar";
@@ -31,7 +31,7 @@ export function HomeView() {
   const name = usePreferencesStore((state) => state.profile.name);
   const [hello] = useState(() => greeting());
   const [prompt, setPrompt] = useState<FolderPrompt | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ id: string; name: string; x: number; y: number; overProject: string | null; overFolder: string | null } | null>(null);
 
   function setPromptForProject(projectId: string) {
     setPrompt({ kind: "create-for", projectId });
@@ -42,9 +42,64 @@ export function HomeView() {
     const folderName = nextFolderName(folders);
     const id = createFolderWithProjects(folderName, [sourceId, targetId]);
     if (!id) return;
-    setDragOver(null);
     const summary = `${projects[targetId].project.name} and ${projects[sourceId].project.name} are in this folder.`;
     setPrompt({ kind: "name-created", id, name: folderName, summary });
+  }
+
+  function startProjectDrag(projectId: string, event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("[data-no-drag]")) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const pointerId = event.pointerId;
+    const handle = event.currentTarget;
+    handle.setPointerCapture(pointerId);
+    let moved = false;
+
+    const hitAt = (x: number, y: number) => {
+      const hit = document.elementFromPoint(x, y);
+      const projectEl = hit?.closest("[data-project-id]");
+      const folderEl = hit?.closest("[data-folder-id]");
+      const overProject = projectEl?.getAttribute("data-project-id") ?? null;
+      const overFolder = folderEl?.getAttribute("data-folder-id") ?? null;
+      return {
+        overProject: overProject && overProject !== projectId ? overProject : null,
+        overFolder: overProject && overProject !== projectId ? null : overFolder,
+      };
+    };
+
+    const move = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return;
+      if (!moved && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 6) return;
+      moved = true;
+      const hit = hitAt(pointer.clientX, pointer.clientY);
+      setDrag({ id: projectId, name: projects[projectId]?.project.name ?? "Project", x: pointer.clientX, y: pointer.clientY, ...hit });
+    };
+
+    const finish = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return;
+      if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      if (moved) {
+        const hit = hitAt(pointer.clientX, pointer.clientY);
+        if (hit.overProject) groupProjects(projectId, hit.overProject);
+        else if (hit.overFolder === "none") moveProjectToFolder(projectId, null);
+        else if (hit.overFolder) moveProjectToFolder(projectId, hit.overFolder);
+        const blockClick = (click: MouseEvent) => {
+          click.preventDefault();
+          click.stopPropagation();
+          window.removeEventListener("click", blockClick, true);
+        };
+        window.addEventListener("click", blockClick, true);
+      }
+      setDrag(null);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   }
 
   const bundles = order
@@ -56,14 +111,6 @@ export function HomeView() {
 
   function projectsIn(folder: ProjectFolder) {
     return bundles.filter((bundle) => bundle.project.folderId === folder.id);
-  }
-
-  function takeDrop(folderId: string | null, event: DragEvent) {
-    event.preventDefault();
-    setDragOver(null);
-    if ((event.target as HTMLElement).closest("[data-project-card]")) return;
-    const projectId = event.dataTransfer.getData("text/plain");
-    if (projectId) moveProjectToFolder(projectId, folderId);
   }
 
   return (
@@ -92,41 +139,28 @@ export function HomeView() {
             folder={folder}
             projects={projectsIn(folder)}
             folders={folders}
-            active={dragOver === folder.id}
-            onDragEnter={() => setDragOver(folder.id)}
-            onDragLeave={(event) => {
-              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-              setDragOver((current) => (current === folder.id ? null : current));
-            }}
-            onDrop={(event) => takeDrop(folder.id, event)}
+            active={drag?.overFolder === folder.id}
+            groupingId={drag?.overProject ?? null}
+            onDragPointerDown={startProjectDrag}
             onNewProject={() => setNewProjectOpen(true, folder.id)}
             onRename={() => setPrompt({ kind: "rename", id: folder.id, name: folder.name })}
             onDelete={() => deleteFolder(folder.id)}
             onNewFolder={setPromptForProject}
-            onGroup={groupProjects}
           />
         ))}
 
-        <section
-          className={cn("mt-6 rounded-md px-1 py-1", dragOver === "none" && "bg-accent-soft")}
-          onDragEnter={(event) => {
-            event.preventDefault();
-            setDragOver("none");
-          }}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragOver("none");
-          }}
-          onDragLeave={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-            setDragOver((current) => (current === "none" ? null : current));
-          }}
-          onDrop={(event) => takeDrop(null, event)}
-        >
+        <section data-folder-id="none" className={cn("mt-6 rounded-md px-1 py-1", drag?.overFolder === "none" && "bg-accent-soft")}>
           {folders.length ? <h3 className="px-1 text-[13px] font-medium">Ungrouped</h3> : null}
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {ungrouped.map((bundle) => (
-              <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={setPromptForProject} onGroup={groupProjects} />
+              <ProjectCard
+                key={bundle.project.id}
+                bundle={bundle}
+                folders={folders}
+                grouping={drag?.overProject === bundle.project.id}
+                onNewFolder={setPromptForProject}
+                onDragPointerDown={startProjectDrag}
+              />
             ))}
             <button
               type="button"
@@ -166,6 +200,17 @@ export function HomeView() {
           setPrompt(null);
         }}
       />
+      {drag ? (
+        <div
+          className="pointer-events-none fixed z-[80] max-w-xs rounded-md border border-line bg-canvas px-3 py-2 text-[13px] shadow-card"
+          style={{ left: drag.x + 14, top: drag.y + 14 }}
+        >
+          <div className="font-medium">{drag.name}</div>
+          <div className="text-[12px] text-muted-ink">
+            {drag.overProject ? "Drop to create a folder" : drag.overFolder && drag.overFolder !== "none" ? "Drop to move into folder" : drag.overFolder === "none" ? "Drop to remove from folder" : "Drag onto a project"}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -183,42 +228,29 @@ function FolderSection({
   projects,
   folders,
   active,
-  onDragEnter,
-  onDragLeave,
-  onDrop,
+  groupingId,
+  onDragPointerDown,
   onNewProject,
   onRename,
   onDelete,
   onNewFolder,
-  onGroup,
 }: {
   folder: ProjectFolder;
   projects: ProjectBundle[];
   folders: ProjectFolder[];
   active: boolean;
-  onDragEnter: () => void;
-  onDragLeave: (event: DragEvent) => void;
-  onDrop: (event: DragEvent) => void;
+  groupingId: string | null;
+  onDragPointerDown: (projectId: string, event: ReactPointerEvent<HTMLElement>) => void;
   onNewProject: () => void;
   onRename: () => void;
   onDelete: () => void;
   onNewFolder: (projectId: string) => void;
-  onGroup: (sourceId: string, targetId: string) => void;
 }) {
   return (
     <section
       aria-label={folder.name}
+      data-folder-id={folder.id}
       className={cn("mt-6 rounded-md border px-3 py-3", active ? "border-accent bg-accent-soft" : "border-line bg-soft")}
-      onDragEnter={(event) => {
-        event.preventDefault();
-        onDragEnter();
-      }}
-      onDragOver={(event) => {
-        event.preventDefault();
-        onDragEnter();
-      }}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
     >
       <div className="flex items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 items-center gap-2">
@@ -245,7 +277,14 @@ function FolderSection({
       {projects.length ? (
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {projects.map((bundle) => (
-            <ProjectCard key={bundle.project.id} bundle={bundle} folders={folders} onNewFolder={onNewFolder} onGroup={onGroup} />
+            <ProjectCard
+              key={bundle.project.id}
+              bundle={bundle}
+              folders={folders}
+              grouping={groupingId === bundle.project.id}
+              onNewFolder={onNewFolder}
+              onDragPointerDown={onDragPointerDown}
+            />
           ))}
         </div>
       ) : (
